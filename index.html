@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ApprAIser Vercel</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #000; color: white; font-family: sans-serif; }
+        .neon-green { color: #39ff14; text-shadow: 0 0 10px #39ff14; }
+        .border-neon { border: 1px solid #39ff14; box-shadow: 0 0 5px #39ff14; }
+    </style>
+</head>
+<body class="flex flex-col items-center min-h-screen p-4">
+    <div id="root" class="w-full max-w-md"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        // Falls Google zickt, hast du hier die volle Auswahl
+        const MODELS = [
+            { id: "gemini-1.5-flash", name: "Flash (Standard)" },
+            { id: "gemini-1.5-flash-latest", name: "Flash (Latest)" },
+            { id: "gemini-1.5-flash-001", name: "Flash (v001)" },
+            { id: "gemini-1.5-flash-002", name: "Flash (v002)" },
+            { id: "gemini-1.5-pro", name: "Pro 1.5" },
+            { id: "gemini-2.0-flash-exp", name: "Flash 2.0 (Exp)" }
+        ];
+
+        function App() {
+            const [apiKey, setApiKey] = useState(localStorage.getItem('gemini_key') || '');
+            const [selectedModel, setSelectedModel] = useState(localStorage.getItem('gemini_model') || 'gemini-1.5-flash');
+            const [view, setView] = useState('SCANNER');
+            const [imagePreview, setImagePreview] = useState(null);
+            const [result, setResult] = useState(null);
+            const [errorMsg, setErrorMsg] = useState(null);
+            const [debugInfo, setDebugInfo] = useState("");
+
+            useEffect(() => { if(apiKey) localStorage.setItem('gemini_key', apiKey); }, [apiKey]);
+            useEffect(() => { localStorage.setItem('gemini_model', selectedModel); }, [selectedModel]);
+
+            const handleFileSelect = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    setImagePreview(ev.target.result);
+                    runAnalysis(ev.target.result, file.type);
+                };
+                reader.readAsDataURL(file);
+            };
+
+            const runAnalysis = async (base64Image, mimeType) => {
+                setView('LOADING');
+                setErrorMsg(null);
+                setDebugInfo(`Calling ${selectedModel}...`);
+                
+                // Wir nutzen v1beta, das ist am flexibelsten
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/${selectedModel}:generateContent?key=${apiKey}`;
+                const base64Data = base64Image.split(',')[1];
+
+                try {
+                    const response = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            contents: [{
+                                parts: [
+                                    { text: "Identify this item for a reseller. Return valid JSON: { \"item\": \"Name\", \"price\": \"Est. Value\", \"script\": \"Negotiation sentence\" }." },
+                                    { inline_data: { mime_type: mimeType, data: base64Data } }
+                                ]
+                            }]
+                        })
+                    });
+
+                    const data = await response.json();
+
+                    if (!response.ok) {
+                        throw new Error(data.error?.message || response.statusText);
+                    }
+
+                    const text = data.candidates[0].content.parts[0].text;
+                    const jsonMatch = text.match(/\{[\s\S]*\}/);
+                    const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : text);
+                    
+                    setResult(parsed);
+                    setView('RESULT');
+
+                } catch (err) {
+                    setErrorMsg(err.message);
+                }
+            };
+
+            return (
+                <div className="flex flex-col gap-6 w-full">
+                    <div className="flex justify-between items-center py-4 border-b border-gray-800">
+                        <h1 className="text-2xl font-bold neon-green">ApprAIser</h1>
+                        <div className="flex flex-col items-end gap-1">
+                             <button onClick={() => {localStorage.clear(); window.location.reload()}} className="text-xs text-gray-500 underline">Reset</button>
+                             <select 
+                                value={selectedModel} 
+                                onChange={(e) => setSelectedModel(e.target.value)}
+                                className="bg-gray-900 text-white text-xs p-1 rounded border border-gray-700 outline-none"
+                             >
+                                {MODELS.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                             </select>
+                        </div>
+                    </div>
+
+                    {!apiKey && (
+                        <input 
+                            type="text" 
+                            placeholder="Paste Google AI Key (AIza...)" 
+                            className="w-full p-3 bg-gray-900 border border-gray-700 rounded text-white mb-4"
+                            onChange={(e) => setApiKey(e.target.value)}
+                        />
+                    )}
+
+                    {view === 'SCANNER' && apiKey && (
+                         <div className="flex flex-col gap-2">
+                            <label className="w-full py-16 bg-gray-900 border-2 border-dashed border-gray-700 rounded-xl flex flex-col items-center justify-center cursor-pointer hover:border-green-500 transition-colors shadow-[0_0_15px_rgba(57,255,20,0.1)]">
+                                <span className="text-5xl mb-4">📸</span>
+                                <span className="text-green-400 font-bold text-xl">SCAN ITEM</span>
+                                <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFileSelect} />
+                            </label>
+                            <p className="text-center text-gray-500 text-xs">Current Model: {selectedModel}</p>
+                        </div>
+                    )}
+
+                    {view === 'LOADING' && (
+                        <div className="flex flex-col items-center justify-center h-64 gap-4">
+                            <div className="w-16 h-16 border-4 border-green-500 border-t-transparent rounded-full animate-spin"></div>
+                            <p className="text-green-400 animate-pulse">Analyzing...</p>
+                            <p className="text-xs text-gray-600">{debugInfo}</p>
+                        </div>
+                    )}
+
+                    {view === 'RESULT' && (errorMsg ? (
+                        <div className="bg-red-900/50 border border-red-500 p-4 rounded text-white">
+                            <h3 className="font-bold mb-2">Error with {selectedModel}</h3>
+                            <p className="text-xs font-mono break-all mb-4">{errorMsg}</p>
+                            <p className="text-sm text-gray-300 mb-2">Try switching the model in the top right menu!</p>
+                            <button onClick={() => setView('SCANNER')} className="bg-white text-black px-4 py-2 rounded font-bold w-full">Back</button>
+                        </div>
+                    ) : (
+                        <div className="flex flex-col gap-4 animate-fade-in">
+                            <div className="w-full h-48 bg-gray-900 rounded border border-gray-800 relative">
+                                <img src={imagePreview} className="w-full h-full object-contain" />
+                            </div>
+                            <div className="bg-gray-900 p-4 border-l-4 border-green-500 rounded">
+                                <p className="text-gray-500 text-xs uppercase">Item</p>
+                                <h2 className="text-2xl font-bold text-white">{result.item}</h2>
+                            </div>
+                            <div className="bg-gray-900 p-4 border-l-4 border-green-500 rounded">
+                                <p className="text-gray-500 text-xs uppercase">Value</p>
+                                <h2 className="text-3xl font-bold neon-green">{result.price}</h2>
+                            </div>
+                            <div className="bg-gray-800 p-4 rounded text-gray-300 italic">"{result.script}"</div>
+                            <button onClick={() => {setView('SCANNER'); setImagePreview(null)}} className="w-full py-4 bg-gray-800 text-white rounded font-bold border border-gray-700">Next Scan</button>
+                        </div>
+                    ))}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
