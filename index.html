@@ -3,165 +3,115 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ApprAIser Vercel</title>
+    <title>ApprAIser DEBUG</title>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        body { background-color: #000; color: white; font-family: sans-serif; }
-        .neon-green { color: #39ff14; text-shadow: 0 0 10px #39ff14; }
-        .border-neon { border: 1px solid #39ff14; box-shadow: 0 0 5px #39ff14; }
-    </style>
 </head>
-<body class="flex flex-col items-center min-h-screen p-4">
-    <div id="root" class="w-full max-w-md"></div>
+<body class="bg-black text-white font-mono p-4">
+    <div id="root"></div>
 
     <script type="text/babel">
         const { useState, useEffect } = React;
 
-        // Falls Google zickt, hast du hier die volle Auswahl
-        const MODELS = [
-            { id: "gemini-1.5-flash", name: "Flash (Standard)" },
-            { id: "gemini-1.5-flash-latest", name: "Flash (Latest)" },
-            { id: "gemini-1.5-flash-001", name: "Flash (v001)" },
-            { id: "gemini-1.5-flash-002", name: "Flash (v002)" },
-            { id: "gemini-1.5-pro", name: "Pro 1.5" },
-            { id: "gemini-2.0-flash-exp", name: "Flash 2.0 (Exp)" }
-        ];
-
         function App() {
             const [apiKey, setApiKey] = useState(localStorage.getItem('gemini_key') || '');
-            const [selectedModel, setSelectedModel] = useState(localStorage.getItem('gemini_model') || 'gemini-1.5-flash');
-            const [view, setView] = useState('SCANNER');
-            const [imagePreview, setImagePreview] = useState(null);
-            const [result, setResult] = useState(null);
-            const [errorMsg, setErrorMsg] = useState(null);
-            const [debugInfo, setDebugInfo] = useState("");
+            const [logs, setLogs] = useState([]);
+            const [isBusy, setIsBusy] = useState(false);
 
-            useEffect(() => { if(apiKey) localStorage.setItem('gemini_key', apiKey); }, [apiKey]);
-            useEffect(() => { localStorage.setItem('gemini_model', selectedModel); }, [selectedModel]);
-
-            const handleFileSelect = (e) => {
-                const file = e.target.files[0];
-                if (!file) return;
-                const reader = new FileReader();
-                reader.onload = (ev) => {
-                    setImagePreview(ev.target.result);
-                    runAnalysis(ev.target.result, file.type);
-                };
-                reader.readAsDataURL(file);
+            // Helfer um Dinge auf den Schirm zu schreiben
+            const log = (msg) => {
+                console.log(msg);
+                setLogs(prev => [...prev, `${new Date().toLocaleTimeString()} > ${msg}`]);
             };
 
-            const runAnalysis = async (base64Image, mimeType) => {
-                setView('LOADING');
-                setErrorMsg(null);
-                setDebugInfo(`Calling ${selectedModel}...`);
-                
-                // Wir nutzen v1beta, das ist am flexibelsten
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/${selectedModel}:generateContent?key=${apiKey}`;
-                const base64Data = base64Image.split(',')[1];
+            useEffect(() => {
+                if(apiKey) localStorage.setItem('gemini_key', apiKey);
+            }, [apiKey]);
+
+            const handleFile = async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                setIsBusy(true);
+                setLogs([]); // Reset logs
+                log("1. Datei ausgewählt: " + file.name);
+                log("2. Dateigröße: " + (file.size / 1024).toFixed(2) + " KB");
 
                 try {
+                    // Bild einlesen
+                    log("3. Lese Bild ein...");
+                    const base64 = await new Promise((resolve) => {
+                        const reader = new FileReader();
+                        reader.onload = (e) => resolve(e.target.result);
+                        reader.readAsDataURL(file);
+                    });
+                    log("4. Bild eingelesen. Länge Base64: " + base64.length);
+
+                    const base64Data = base64.split(',')[1];
+                    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+                    
+                    log("5. Sende Anfrage an API...");
+                    log("URL: " + url.replace(apiKey, "HIDDEN_KEY"));
+
                     const response = await fetch(url, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             contents: [{
                                 parts: [
-                                    { text: "Identify this item for a reseller. Return valid JSON: { \"item\": \"Name\", \"price\": \"Est. Value\", \"script\": \"Negotiation sentence\" }." },
-                                    { inline_data: { mime_type: mimeType, data: base64Data } }
+                                    { text: "Describe this image. Return JSON: { \"item\": \"name\" }." },
+                                    { inline_data: { mime_type: file.type, data: base64Data } }
                                 ]
                             }]
                         })
                     });
 
-                    const data = await response.json();
+                    log("6. Antwort erhalten! Status: " + response.status);
 
                     if (!response.ok) {
-                        throw new Error(data.error?.message || response.statusText);
+                        const errorText = await response.text();
+                        log("FEHLER VOM SERVER: " + errorText);
+                        throw new Error("Server Error: " + response.status);
                     }
 
-                    const text = data.candidates[0].content.parts[0].text;
-                    const jsonMatch = text.match(/\{[\s\S]*\}/);
-                    const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : text);
-                    
-                    setResult(parsed);
-                    setView('RESULT');
+                    const data = await response.json();
+                    log("7. Daten geparst.");
+                    log("ANTWORT: " + JSON.stringify(data, null, 2));
 
                 } catch (err) {
-                    setErrorMsg(err.message);
+                    log("FATAL ERROR: " + err.message);
+                } finally {
+                    setIsBusy(false);
+                    log("--- ENDE ---");
                 }
             };
 
             return (
-                <div className="flex flex-col gap-6 w-full">
-                    <div className="flex justify-between items-center py-4 border-b border-gray-800">
-                        <h1 className="text-2xl font-bold neon-green">ApprAIser</h1>
-                        <div className="flex flex-col items-end gap-1">
-                             <button onClick={() => {localStorage.clear(); window.location.reload()}} className="text-xs text-gray-500 underline">Reset</button>
-                             <select 
-                                value={selectedModel} 
-                                onChange={(e) => setSelectedModel(e.target.value)}
-                                className="bg-gray-900 text-white text-xs p-1 rounded border border-gray-700 outline-none"
-                             >
-                                {MODELS.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                             </select>
-                        </div>
-                    </div>
-
+                <div className="max-w-md mx-auto">
+                    <h1 className="text-xl font-bold text-green-400 mb-4 border-b border-green-800 pb-2">DEBUG MODE</h1>
+                    
                     {!apiKey && (
                         <input 
                             type="text" 
-                            placeholder="Paste Google AI Key (AIza...)" 
-                            className="w-full p-3 bg-gray-900 border border-gray-700 rounded text-white mb-4"
+                            placeholder="API Key hier rein..." 
+                            className="w-full p-2 bg-gray-900 border border-gray-700 rounded mb-4"
                             onChange={(e) => setApiKey(e.target.value)}
                         />
                     )}
 
-                    {view === 'SCANNER' && apiKey && (
-                         <div className="flex flex-col gap-2">
-                            <label className="w-full py-16 bg-gray-900 border-2 border-dashed border-gray-700 rounded-xl flex flex-col items-center justify-center cursor-pointer hover:border-green-500 transition-colors shadow-[0_0_15px_rgba(57,255,20,0.1)]">
-                                <span className="text-5xl mb-4">📸</span>
-                                <span className="text-green-400 font-bold text-xl">SCAN ITEM</span>
-                                <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFileSelect} />
-                            </label>
-                            <p className="text-center text-gray-500 text-xs">Current Model: {selectedModel}</p>
-                        </div>
-                    )}
+                    <input 
+                        type="file" 
+                        onChange={handleFile} 
+                        className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-green-500 file:text-black hover:file:bg-green-600 mb-6"
+                    />
 
-                    {view === 'LOADING' && (
-                        <div className="flex flex-col items-center justify-center h-64 gap-4">
-                            <div className="w-16 h-16 border-4 border-green-500 border-t-transparent rounded-full animate-spin"></div>
-                            <p className="text-green-400 animate-pulse">Analyzing...</p>
-                            <p className="text-xs text-gray-600">{debugInfo}</p>
-                        </div>
-                    )}
-
-                    {view === 'RESULT' && (errorMsg ? (
-                        <div className="bg-red-900/50 border border-red-500 p-4 rounded text-white">
-                            <h3 className="font-bold mb-2">Error with {selectedModel}</h3>
-                            <p className="text-xs font-mono break-all mb-4">{errorMsg}</p>
-                            <p className="text-sm text-gray-300 mb-2">Try switching the model in the top right menu!</p>
-                            <button onClick={() => setView('SCANNER')} className="bg-white text-black px-4 py-2 rounded font-bold w-full">Back</button>
-                        </div>
-                    ) : (
-                        <div className="flex flex-col gap-4 animate-fade-in">
-                            <div className="w-full h-48 bg-gray-900 rounded border border-gray-800 relative">
-                                <img src={imagePreview} className="w-full h-full object-contain" />
-                            </div>
-                            <div className="bg-gray-900 p-4 border-l-4 border-green-500 rounded">
-                                <p className="text-gray-500 text-xs uppercase">Item</p>
-                                <h2 className="text-2xl font-bold text-white">{result.item}</h2>
-                            </div>
-                            <div className="bg-gray-900 p-4 border-l-4 border-green-500 rounded">
-                                <p className="text-gray-500 text-xs uppercase">Value</p>
-                                <h2 className="text-3xl font-bold neon-green">{result.price}</h2>
-                            </div>
-                            <div className="bg-gray-800 p-4 rounded text-gray-300 italic">"{result.script}"</div>
-                            <button onClick={() => {setView('SCANNER'); setImagePreview(null)}} className="w-full py-4 bg-gray-800 text-white rounded font-bold border border-gray-700">Next Scan</button>
-                        </div>
-                    ))}
+                    <div className="bg-gray-900 p-4 rounded border border-gray-800 font-mono text-xs overflow-x-auto whitespace-pre-wrap h-96">
+                        {logs.length === 0 ? <span className="text-gray-600">Warte auf Aktion...</span> : logs.map((l, i) => (
+                            <div key={i} className="mb-1 border-b border-gray-800 pb-1">{l}</div>
+                        ))}
+                    </div>
                 </div>
             );
         }
