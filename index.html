@@ -2,116 +2,196 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ApprAIser DEBUG</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ApprAIser 2.0</title>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #000; color: white; font-family: sans-serif; -webkit-tap-highlight-color: transparent; }
+        .neon-green { color: #39ff14; text-shadow: 0 0 10px #39ff14; }
+        .scan-btn { background: #39ff14; color: black; box-shadow: 0 0 20px rgba(57,255,20,0.4); }
+        .scan-btn:active { transform: scale(0.98); background: #32cd32; }
+    </style>
 </head>
-<body class="bg-black text-white font-mono p-4">
-    <div id="root"></div>
+<body class="flex flex-col items-center min-h-screen p-4">
+    <div id="root" class="w-full max-w-md"></div>
 
     <script type="text/babel">
         const { useState, useEffect } = React;
 
+        // WICHTIG: Das erste Modell ist jetzt der Standard!
+        const MODELS = [
+            { id: "gemini-2.0-flash-exp", name: "Flash 2.0 (Exp) - START HERE" },
+            { id: "gemini-1.5-flash", name: "Flash 1.5 (Standard)" },
+            { id: "gemini-1.5-flash-latest", name: "Flash 1.5 (Latest)" },
+            { id: "gemini-1.5-pro", name: "Pro 1.5" }
+        ];
+
+        // Bild verkleinern (Turbo-Modus)
+        const compressImage = (file) => {
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        const MAX_WIDTH = 800; 
+                        let width = img.width;
+                        let height = img.height;
+                        if (width > MAX_WIDTH) {
+                            height *= MAX_WIDTH / width;
+                            width = MAX_WIDTH;
+                        }
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, width, height);
+                        resolve(canvas.toDataURL('image/jpeg', 0.7));
+                    };
+                    img.src = event.target.result;
+                };
+                reader.readAsDataURL(file);
+            });
+        };
+
         function App() {
             const [apiKey, setApiKey] = useState(localStorage.getItem('gemini_key') || '');
-            const [logs, setLogs] = useState([]);
-            const [isBusy, setIsBusy] = useState(false);
+            // Wir erzwingen beim ersten Start das 2.0 Modell
+            const [selectedModel, setSelectedModel] = useState(localStorage.getItem('gemini_model_v2') || 'gemini-2.0-flash-exp');
+            const [view, setView] = useState('SCANNER');
+            const [imagePreview, setImagePreview] = useState(null);
+            const [result, setResult] = useState(null);
+            const [status, setStatus] = useState("");
+            const [errorMsg, setErrorMsg] = useState(null);
 
-            // Helfer um Dinge auf den Schirm zu schreiben
-            const log = (msg) => {
-                console.log(msg);
-                setLogs(prev => [...prev, `${new Date().toLocaleTimeString()} > ${msg}`]);
-            };
+            useEffect(() => { if(apiKey) localStorage.setItem('gemini_key', apiKey); }, [apiKey]);
+            
+            // Speichere das Modell unter neuem Key, damit alte Einstellungen nicht stören
+            useEffect(() => { localStorage.setItem('gemini_model_v2', selectedModel); }, [selectedModel]);
 
-            useEffect(() => {
-                if(apiKey) localStorage.setItem('gemini_key', apiKey);
-            }, [apiKey]);
-
-            const handleFile = async (e) => {
+            const handleFileSelect = async (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
 
-                setIsBusy(true);
-                setLogs([]); // Reset logs
-                log("1. Datei ausgewählt: " + file.name);
-                log("2. Dateigröße: " + (file.size / 1024).toFixed(2) + " KB");
+                setView('LOADING');
+                setErrorMsg(null);
+                
+                try {
+                    setStatus("Optimizing Image...");
+                    const compressedBase64 = await compressImage(file);
+                    setImagePreview(compressedBase64);
+                    runAnalysis(compressedBase64);
+                } catch (err) {
+                    setErrorMsg("Image Error: " + err.message);
+                    setView('RESULT');
+                }
+            };
+
+            const runAnalysis = async (base64Full) => {
+                const base64Data = base64Full.split(',')[1];
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/${selectedModel}:generateContent?key=${apiKey}`;
+                
+                setStatus(`Asking Google AI (${selectedModel})...`);
 
                 try {
-                    // Bild einlesen
-                    log("3. Lese Bild ein...");
-                    const base64 = await new Promise((resolve) => {
-                        const reader = new FileReader();
-                        reader.onload = (e) => resolve(e.target.result);
-                        reader.readAsDataURL(file);
-                    });
-                    log("4. Bild eingelesen. Länge Base64: " + base64.length);
-
-                    const base64Data = base64.split(',')[1];
-                    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
-                    
-                    log("5. Sende Anfrage an API...");
-                    log("URL: " + url.replace(apiKey, "HIDDEN_KEY"));
-
                     const response = await fetch(url, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             contents: [{
                                 parts: [
-                                    { text: "Describe this image. Return JSON: { \"item\": \"name\" }." },
-                                    { inline_data: { mime_type: file.type, data: base64Data } }
+                                    { text: "Analyze this item for a reseller. Return JSON: { \"item\": \"Short Title\", \"price\": \"XX - YY EUR\", \"script\": \"One sentence negotiation tip\" }." },
+                                    { inline_data: { mime_type: "image/jpeg", data: base64Data } }
                                 ]
                             }]
                         })
                     });
 
-                    log("6. Antwort erhalten! Status: " + response.status);
-
                     if (!response.ok) {
-                        const errorText = await response.text();
-                        log("FEHLER VOM SERVER: " + errorText);
-                        throw new Error("Server Error: " + response.status);
+                        const errorData = await response.json();
+                        throw new Error(errorData.error?.message || `Error ${response.status}`);
                     }
 
                     const data = await response.json();
-                    log("7. Daten geparst.");
-                    log("ANTWORT: " + JSON.stringify(data, null, 2));
+                    const text = data.candidates[0].content.parts[0].text;
+                    const jsonMatch = text.match(/\{[\s\S]*\}/);
+                    const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : text);
+                    
+                    setResult(parsed);
+                    setView('RESULT');
 
                 } catch (err) {
-                    log("FATAL ERROR: " + err.message);
-                } finally {
-                    setIsBusy(false);
-                    log("--- ENDE ---");
+                    console.error(err);
+                    setErrorMsg(err.message); // Zeige den echten Fehler an!
+                    setView('RESULT');
                 }
             };
 
             return (
-                <div className="max-w-md mx-auto">
-                    <h1 className="text-xl font-bold text-green-400 mb-4 border-b border-green-800 pb-2">DEBUG MODE</h1>
-                    
+                <div className="flex flex-col gap-6 w-full max-w-md mx-auto">
+                    <div className="flex justify-between items-center py-4 border-b border-gray-800">
+                        <h1 className="text-2xl font-bold neon-green italic">APPRAISER <span className="text-xs not-italic text-white bg-green-900 px-1 rounded">2.0</span></h1>
+                        <div className="flex flex-col items-end">
+                            <select 
+                                value={selectedModel} 
+                                onChange={(e) => setSelectedModel(e.target.value)}
+                                className="bg-gray-900 text-white text-xs p-1 rounded border border-gray-700 outline-none mb-1 max-w-[120px]"
+                            >
+                                {MODELS.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                            </select>
+                            <button onClick={() => {localStorage.clear(); window.location.reload()}} className="text-xs text-gray-500 underline">Reset Key</button>
+                        </div>
+                    </div>
+
                     {!apiKey && (
                         <input 
                             type="text" 
-                            placeholder="API Key hier rein..." 
-                            className="w-full p-2 bg-gray-900 border border-gray-700 rounded mb-4"
+                            placeholder="Paste Google API Key (AIza...)" 
+                            className="w-full p-4 bg-gray-900 border border-green-900 rounded-lg text-white mb-4 focus:border-green-500 outline-none"
                             onChange={(e) => setApiKey(e.target.value)}
                         />
                     )}
 
-                    <input 
-                        type="file" 
-                        onChange={handleFile} 
-                        className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-green-500 file:text-black hover:file:bg-green-600 mb-6"
-                    />
+                    {view === 'SCANNER' && apiKey && (
+                        <div className="flex flex-col gap-4 mt-8">
+                            <label className="scan-btn w-full py-16 rounded-2xl flex flex-col items-center justify-center cursor-pointer transition-transform">
+                                <span className="text-5xl mb-2">📸</span>
+                                <span className="font-black text-xl tracking-widest">SCAN OBJECT</span>
+                                <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFileSelect} />
+                            </label>
+                            <p className="text-center text-gray-600 text-xs">Current Engine: {selectedModel}</p>
+                        </div>
+                    )}
 
-                    <div className="bg-gray-900 p-4 rounded border border-gray-800 font-mono text-xs overflow-x-auto whitespace-pre-wrap h-96">
-                        {logs.length === 0 ? <span className="text-gray-600">Warte auf Aktion...</span> : logs.map((l, i) => (
-                            <div key={i} className="mb-1 border-b border-gray-800 pb-1">{l}</div>
-                        ))}
-                    </div>
+                    {view === 'LOADING' && (
+                        <div className="flex flex-col items-center justify-center h-64 gap-6">
+                            <div className="w-16 h-16 border-4 border-green-500 border-t-transparent rounded-full animate-spin"></div>
+                            <p className="text-green-400 font-mono text-sm animate-pulse">{status}</p>
+                        </div>
+                    )}
+
+                    {view === 'RESULT' && (errorMsg ? (
+                        <div className="bg-red-900/40 border border-red-500 p-6 rounded-xl text-white mt-4">
+                            <h3 className="font-bold text-red-400 mb-2">Connection Error</h3>
+                            <p className="text-xs font-mono break-words mb-4 bg-black/50 p-2 rounded">{errorMsg}</p>
+                            <p className="text-sm text-gray-300 mb-2">Try selecting a different model in the top right menu!</p>
+                            <button onClick={() => setView('SCANNER')} className="bg-white text-black px-6 py-3 rounded-lg font-bold w-full hover:bg-gray-200">Try Again</button>
+                        </div>
+                    ) : (
+                        <div className="flex flex-col gap-5 animate-fade-in pb-10">
+                            <div className="w-full aspect-square bg-gray-900 rounded-xl border border-gray-800 relative overflow-hidden">
+                                <img src={imagePreview} className="w-full h-full object-contain" />
+                            </div>
+                            <div className="bg-gray-900 p-5 rounded-xl border-l-4 border-green-500 shadow-lg">
+                                <h2 className="text-2xl font-bold text-white leading-tight">{result.item}</h2>
+                                <h2 className="text-4xl font-black text-green-400 mt-2">{result.price}</h2>
+                            </div>
+                            <div className="bg-gray-800 p-5 rounded-xl italic text-gray-300">"{result.script}"</div>
+                            <button onClick={() => {setView('SCANNER'); setImagePreview(null)}} className="w-full py-4 bg-gray-800 text-white rounded-xl font-bold border border-gray-700">Next Scan</button>
+                        </div>
+                    ))}
                 </div>
             );
         }
